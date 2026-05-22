@@ -113,7 +113,7 @@ jobs:
 
       - name: Close obsolete PRs
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
           set -euo pipefail
 
