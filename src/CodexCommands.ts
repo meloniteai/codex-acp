@@ -18,6 +18,7 @@ export type CommandHandleResult =
     | { handled: true, turnCompleted?: TurnCompletedNotification };
 
 export type CommandHandleOptions = {
+    onTurnStartPending?: () => void;
     onTurnStarted?: (turnId: string, threadId: string) => void;
 };
 
@@ -122,6 +123,11 @@ export class CodexCommands {
                 input: null
             },
             {
+                name: "goal",
+                description: "Set, pause, resume, or clear a task goal.",
+                input: { hint: "[<objective>|clear|pause|resume]" }
+            },
+            {
                 name: "logout",
                 description: "Sign out of Codex. This option is available when you are logged in via ChatGPT.",
                 input: null
@@ -163,6 +169,9 @@ export class CodexCommands {
             case "compact": {
                 await this.runWithProcessCheck(() => this.codexAcpClient.runCompact(sessionId));
                 return { handled: true };
+            }
+            case "goal": {
+                return await this.runGoalCommand(sessionState, command.rest, options);
             }
             case "review": {
                 const target = this.buildReviewTarget(command.rest);
@@ -260,17 +269,88 @@ export class CodexCommands {
         target: ReviewTarget,
         options: CommandHandleOptions,
     ): Promise<TurnCompletedNotification> {
+        options.onTurnStartPending?.();
         return await this.runWithProcessCheck(() => this.codexAcpClient.runReview(
             sessionState.sessionId,
             target,
             (turnId, threadId) => {
-                if (options.onTurnStarted) {
-                    options.onTurnStarted(turnId, threadId);
-                } else {
-                    sessionState.currentTurnId = turnId;
-                }
+                this.handleCommandTurnStarted(sessionState, options, turnId, threadId);
             },
         ));
+    }
+
+    private async runGoalCommand(
+        sessionState: SessionState,
+        rest: string,
+        options: CommandHandleOptions,
+    ): Promise<CommandHandleResult> {
+        const sessionId = sessionState.sessionId;
+        const argument = rest.trim();
+        if (argument.length === 0) {
+            await this.sendCommandUsageMessage("goal", "[<objective>|clear|pause|resume]", sessionId);
+            return { handled: true };
+        }
+
+        switch (argument.toLowerCase()) {
+            case "pause":
+                await this.runWithProcessCheck(() => this.codexAcpClient.setGoalStatus(sessionId, "paused"));
+                return { handled: true };
+            case "resume":
+                options.onTurnStartPending?.();
+                return this.createGoalCommandResult(await this.runWithProcessCheck(() => this.codexAcpClient.resumeGoal(
+                    sessionId,
+                    (turnId) => {
+                        this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
+                    },
+                )));
+            case "clear":
+                await this.runWithProcessCheck(() => this.codexAcpClient.clearGoal(sessionId));
+                return { handled: true };
+        }
+
+        if (argument.length > 4000) {
+            const session = new ACPSessionConnection(this.connection, sessionId);
+            await session.update({
+                sessionUpdate: "agent_message_chunk",
+                content: {
+                    type: "text",
+                    text: 'Command "/goal" requires goal text of at most 4000 characters.'
+                }
+            });
+            return { handled: true };
+        }
+
+        options.onTurnStartPending?.();
+        return this.createGoalCommandResult(await this.runWithProcessCheck(() => this.codexAcpClient.setGoal(
+            sessionId,
+            argument,
+            (turnId) => {
+                this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
+            },
+        )));
+    }
+
+    private handleCommandTurnStarted(
+        sessionState: SessionState,
+        options: CommandHandleOptions,
+        turnId: string,
+        threadId: string,
+    ): void {
+        if (options.onTurnStarted) {
+            options.onTurnStarted(turnId, threadId);
+        } else {
+            sessionState.currentTurnId = turnId;
+        }
+    }
+
+    private createGoalCommandResult(turnCompleted: TurnCompletedNotification | null): CommandHandleResult {
+        if (turnCompleted === null) {
+            return { handled: true };
+        }
+        return {
+            handled: true,
+            turnCompleted,
+        };
     }
 
     private buildReviewTarget(instructions: string): ReviewTarget {
