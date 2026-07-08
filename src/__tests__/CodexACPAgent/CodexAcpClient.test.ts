@@ -2676,12 +2676,14 @@ describe('ACP server test', { timeout: 40_000 }, () => {
         vi.spyOn(codexAcpClient, "newSession")
             .mockResolvedValueOnce({
                 sessionId: "session-1",
+                threadId: "session-1",
                 currentModelId,
                 models: [model],
                 additionalDirectories: [],
             })
             .mockResolvedValueOnce({
                 sessionId: "session-2",
+                threadId: "session-2",
                 currentModelId,
                 models: [model],
                 additionalDirectories: [],
@@ -2740,6 +2742,7 @@ describe('ACP server test', { timeout: 40_000 }, () => {
             });
         vi.spyOn(codexAcpClient, "newSession").mockResolvedValue({
             sessionId: "openai-session",
+            threadId: "openai-session",
             currentModelId,
             models: [model],
             modelProvider: "openai",
@@ -2792,6 +2795,7 @@ describe('ACP server test', { timeout: 40_000 }, () => {
             });
         vi.spyOn(codexAcpClient, "newSession").mockResolvedValue({
             sessionId: "custom-provider-session",
+            threadId: "custom-provider-session",
             currentModelId,
             models: [model],
             additionalDirectories: [],

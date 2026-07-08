@@ -126,6 +126,7 @@ async function createSession(): Promise<{
     vi.spyOn(codexAcpClient, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
     vi.spyOn(codexAcpClient, "newSession").mockResolvedValue({
         sessionId,
+        threadId: sessionId,
         currentModelId: "model-id[medium]",
         models: [model],
         currentServiceTier: null,

@@ -62,6 +62,7 @@ describe("New session logout handling", () => {
         vi.spyOn(codexAcpClient, "newSession")
             .mockResolvedValueOnce({
                 sessionId: "openai-session",
+                threadId: "openai-session",
                 currentModelId,
                 models: [model],
                 modelProvider: "openai",
@@ -69,6 +70,7 @@ describe("New session logout handling", () => {
             })
             .mockResolvedValueOnce({
                 sessionId: "custom-provider-session",
+                threadId: "custom-provider-session",
                 currentModelId,
                 models: [model],
                 modelProvider: "custom-provider",

@@ -205,6 +205,133 @@ describe("CodexACPAgent - loadSession", () => {
         );
     });
 
+    it("routes resumed thread events and turns through the active Codex thread id", async () => {
+        const fixture = createCodexMockTestFixture();
+        const codexAcpAgent = fixture.getCodexAcpAgent();
+        const codexAcpClient = fixture.getCodexAcpClient();
+        const codexAppServerClient = fixture.getCodexAppServerClient();
+
+        codexAcpClient.authRequired = vi.fn().mockResolvedValue(false);
+        codexAcpClient.getAccount = vi.fn().mockResolvedValue({
+            account: null,
+            requiresOpenaiAuth: false,
+        });
+        codexAcpClient.listSkills = vi.fn().mockResolvedValue({ data: [] });
+
+        const model = createTestModel({ id: "gpt-5.2", displayName: "GPT-5.2" });
+        codexAppServerClient.listModels = vi.fn().mockResolvedValue({
+            data: [model],
+            nextCursor: null,
+        });
+
+        const thread: Thread = {
+            id: "active-thread-id",
+            sessionId: "session-id",
+            parentThreadId: null,
+            threadSource: null,
+            forkedFromId: null,
+            preview: "Previous question",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 123,
+            updatedAt: 124,
+            recencyAt: null,
+            status: { type: "idle" },
+            path: null,
+            cwd: "/test/project",
+            cliVersion: "0.0.0",
+            source: "appServer",
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: null,
+            turns: [],
+        };
+
+        codexAppServerClient.threadResume = vi.fn().mockResolvedValue({
+            thread,
+            model: model.id,
+            modelProvider: "openai",
+            cwd: "/test/project",
+            approvalPolicy: "never",
+            sandbox: { type: "dangerFullAccess" },
+            reasoningEffort: model.defaultReasoningEffort,
+        });
+        codexAppServerClient.threadRead = vi.fn().mockResolvedValue({ thread });
+        const turnStartSpy = vi.spyOn(codexAppServerClient, "turnStart").mockResolvedValue({
+            turn: {
+                id: "turn-id",
+                items: [],
+                itemsView: "notLoaded",
+                status: "inProgress",
+                error: null,
+                startedAt: null,
+                completedAt: null,
+                durationMs: null,
+            },
+        });
+        let resolveTurnCompleted!: (value: unknown) => void;
+        vi.spyOn(codexAppServerClient, "awaitTurnCompleted").mockReturnValue(new Promise((resolve) => {
+            resolveTurnCompleted = resolve;
+        }) as any);
+
+        await codexAcpAgent.initialize({ protocolVersion: 1 });
+        await codexAcpAgent.loadSession({
+            sessionId: "session-id",
+            cwd: "/test/project",
+            mcpServers: [],
+        });
+
+        fixture.clearAcpConnectionDump();
+        const promptPromise = codexAcpAgent.prompt({
+            sessionId: "session-id",
+            prompt: [{ type: "text", text: "Continue" }],
+        });
+
+        await vi.waitFor(() => {
+            expect(turnStartSpy).toHaveBeenCalled();
+        });
+
+        fixture.sendServerNotification({
+            method: "item/agentMessage/delta",
+            params: {
+                threadId: "active-thread-id",
+                turnId: "turn-id",
+                itemId: "item-agent-1",
+                delta: "continued",
+            },
+        });
+
+        resolveTurnCompleted({
+            threadId: "active-thread-id",
+            turn: {
+                id: "turn-id",
+                items: [],
+                itemsView: "full",
+                status: "completed",
+                error: null,
+                startedAt: null,
+                completedAt: null,
+                durationMs: null,
+            },
+        });
+        await promptPromise;
+
+        expect(turnStartSpy).toHaveBeenCalledWith(expect.objectContaining({
+            threadId: "active-thread-id",
+        }));
+        expect(fixture.getAcpConnectionEvents([])).toContainEqual(expect.objectContaining({
+            method: "sessionUpdate",
+            args: [expect.objectContaining({
+                sessionId: "session-id",
+                update: expect.objectContaining({
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "continued" },
+                }),
+            })],
+        }));
+    });
+
     it("should not recover session mcp servers during loadSession when request omits them", async () => {
         const fixture = createCodexMockTestFixture();
         const codexAcpAgent = fixture.getCodexAcpAgent();

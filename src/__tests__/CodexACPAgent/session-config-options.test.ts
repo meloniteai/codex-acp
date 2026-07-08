@@ -40,6 +40,7 @@ async function createSession(currentModelId: string, availableModels: Array<Mode
     vi.spyOn(codexAcpClient, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
     vi.spyOn(codexAcpClient, "newSession").mockResolvedValue({
         sessionId: "session-id",
+        threadId: "session-id",
         currentModelId,
         models: availableModels,
         additionalDirectories: [],
@@ -198,6 +199,7 @@ describe("Session config options", () => {
         vi.spyOn(codexAcpClient, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
         vi.spyOn(codexAcpClient, "newSession").mockResolvedValue({
             sessionId: "session-id",
+            threadId: "session-id",
             currentModelId: "fast-model[medium]",
             models: [fast],
             additionalDirectories: [],

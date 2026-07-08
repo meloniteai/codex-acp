@@ -41,6 +41,7 @@ describe("Fast mode session config", () => {
         vi.spyOn(codexAcpClient, "getAccount").mockResolvedValue({account: null, requiresOpenaiAuth: false});
         vi.spyOn(codexAcpClient, "newSession").mockResolvedValue({
             sessionId: "session-id",
+            threadId: "session-id",
             currentModelId: "fast-model[medium]",
             models: [fastModel, slowModel],
             currentServiceTier,

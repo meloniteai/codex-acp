@@ -149,6 +149,7 @@ describe("CodexACPAgent - list sessions", () => {
         });
         vi.spyOn(codexAcpClient, "newSession").mockResolvedValue({
             sessionId: "sess-1",
+            threadId: "sess-1",
             currentModelId: "gpt-5[medium]",
             models: [{
                 id: "gpt-5",

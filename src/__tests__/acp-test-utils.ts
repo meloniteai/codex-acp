@@ -350,6 +350,7 @@ function anonymizeValue(value: any, path: string[], fieldsToAnonymize: Set<strin
  * Override specific fields as needed.
  */
 export function createTestSessionState(overrides?: Partial<SessionState>): SessionState {
+    const sessionId = overrides?.sessionId ?? "session-id";
     return {
         currentTurnId: null,
         lastTokenUsage: null,
@@ -361,7 +362,8 @@ export function createTestSessionState(overrides?: Partial<SessionState>): Sessi
         authProvider: null,
         cwd: "/test/cwd",
         additionalDirectories: [],
-        sessionId: "session-id",
+        sessionId,
+        threadId: overrides?.threadId ?? sessionId,
         currentModelId: "model-id[effort]",
         availableModels: [],
         supportedReasoningEfforts: [],

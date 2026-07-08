@@ -83,6 +83,7 @@ export interface ThreadGoalSnapshot {
 
 export interface SessionState {
     sessionId: string,
+    threadId: string,
     currentModelId: string,
     availableModels: Array<Model>,
     supportedReasoningEfforts: Array<ReasoningEffortOption>,
@@ -373,7 +374,7 @@ export class CodexAcpServer {
             sessionMetadata = await this.runWithProcessCheck(() => this.codexAcpClient.newSession(request));
         }
 
-        const {sessionId, currentModelId, models} = sessionMetadata;
+        const {sessionId, threadId, currentModelId, models} = sessionMetadata;
         const authProvider = sessionMetadata.modelProvider ?? this.codexAcpClient.getModelProvider();
         let authState: ActiveAuthState;
         try {
@@ -394,6 +395,7 @@ export class CodexAcpServer {
         const currentModelSupportsFast = modelSupportsFast(currentModel);
         const sessionState: SessionState = {
             sessionId: sessionId,
+            threadId: threadId,
             currentModelId: currentModelId,
             availableModels: models,
             supportedReasoningEfforts: currentModel?.supportedReasoningEfforts ?? [],
@@ -541,7 +543,7 @@ export class CodexAcpServer {
                 await activePrompt.completion;
             }
 
-            await this.runWithProcessCheck(() => this.codexAcpClient.closeSession(params.sessionId));
+            await this.runWithProcessCheck(() => this.codexAcpClient.closeSession(sessionState?.threadId ?? params.sessionId));
             logger.log("Session closed", {sessionId: params.sessionId});
         } finally {
             if (this.getSessionGeneration(params.sessionId) === closeGeneration) {
@@ -559,6 +561,7 @@ export class CodexAcpServer {
     async deleteSession(params: acp.DeleteSessionRequest): Promise<acp.DeleteSessionResponse> {
         logger.log("Deleting session...", {sessionId: params.sessionId});
         const sessionId = params.sessionId;
+        const threadId = this.sessions.get(sessionId)?.threadId ?? sessionId;
         const shouldCloseLocalSession = this.hasLocalSession(sessionId);
 
         this.beginSessionCloseFence(sessionId);
@@ -569,7 +572,7 @@ export class CodexAcpServer {
                 this.bumpSessionGeneration(sessionId);
             }
 
-            await this.runWithProcessCheck(() => this.codexAcpClient.deleteSession(sessionId));
+            await this.runWithProcessCheck(() => this.codexAcpClient.deleteSession(threadId));
             logger.log("Session deleted", {sessionId});
         } finally {
             this.endSessionCloseFence(sessionId);
@@ -889,7 +892,7 @@ export class CodexAcpServer {
             throw err;
         }
 
-        const {sessionId, currentModelId, models, thread} = sessionMetadata;
+        const {sessionId, threadId, currentModelId, models, thread} = sessionMetadata;
         const authProvider = sessionMetadata.modelProvider ?? this.codexAcpClient.getModelProvider();
         let authState: ActiveAuthState;
         try {
@@ -909,6 +912,7 @@ export class CodexAcpServer {
         const currentModelSupportsFast = modelSupportsFast(currentModel);
         const sessionState: SessionState = {
             sessionId: sessionId,
+            threadId: threadId,
             currentModelId: currentModelId,
             availableModels: models,
             supportedReasoningEfforts: currentModel?.supportedReasoningEfforts ?? [],
@@ -1368,13 +1372,13 @@ export class CodexAcpServer {
         });
         if (resolveInterruptedTurn) {
             this.codexAcpClient.markTurnStale({
-                threadId: sessionState.sessionId,
+                threadId: sessionState.threadId,
                 turnId,
             });
         }
         try {
             await this.runWithProcessCheck(() => this.codexAcpClient.turnInterrupt({
-                threadId: sessionState.sessionId,
+                threadId: sessionState.threadId,
                 turnId,
             }));
             logger.log(`${requestName} - turnInterrupt succeeded`, {
@@ -1386,7 +1390,7 @@ export class CodexAcpServer {
         } finally {
             if (resolveInterruptedTurn) {
                 this.codexAcpClient.resolveTurnInterrupted({
-                    threadId: sessionState.sessionId,
+                    threadId: sessionState.threadId,
                     turnId,
                 });
             }
@@ -1442,7 +1446,7 @@ export class CodexAcpServer {
             const eventHandler = new CodexEventHandler(this.connection, sessionState);
             const approvalHandler = new CodexApprovalHandler(this.connection, sessionState, activePrompt.signal);
             const elicitationHandler = new CodexElicitationHandler(this.connection, sessionState, activePrompt.signal);
-            await this.codexAcpClient.subscribeToSessionEvents(params.sessionId,
+            await this.codexAcpClient.subscribeToSessionEvents(sessionState.threadId,
                 (event) => {
                     elicitationHandler.handleNotification(event);
                     return eventHandler.handleNotification(event);
@@ -1484,7 +1488,7 @@ export class CodexAcpServer {
             }
             if (commandResult.handled) {
                 logger.log("Prompt handled by a command");
-                await this.codexAcpClient.waitForSessionNotifications(params.sessionId);
+                await this.codexAcpClient.waitForSessionNotifications(sessionState.threadId);
                 if (commandResult.turnCompleted?.turn.status === "interrupted") {
                     await this.notifyConversationInterrupted(params.sessionId);
                     return this.cancelledPromptResponse(sessionState);
@@ -1529,6 +1533,7 @@ export class CodexAcpServer {
             const sendPromptPromise = this.runWithProcessCheck(
                 () => this.codexAcpClient.sendPrompt(
                     params,
+                    sessionState.threadId,
                     agentMode,
                     modelId,
                     serviceTier,
@@ -1536,7 +1541,7 @@ export class CodexAcpServer {
                     sessionState.cwd,
                     sessionState.additionalDirectories,
                     (turnId) => {
-                        const turn = {threadId: params.sessionId, turnId};
+                        const turn = {threadId: sessionState.threadId, turnId};
                         activePrompt.currentTurn = turn;
                         if (this.promptShouldStop(params.sessionId, activePrompt)) {
                             this.interruptLateStartedTurn(turn);
@@ -1562,7 +1567,7 @@ export class CodexAcpServer {
                 return this.cancelledPromptResponse(sessionState);
             }
 
-            await this.codexAcpClient.waitForSessionNotifications(params.sessionId);
+            await this.codexAcpClient.waitForSessionNotifications(sessionState.threadId);
 
             if (turnCompleted.turn.status === "interrupted") {
                 await this.notifyConversationInterrupted(params.sessionId);

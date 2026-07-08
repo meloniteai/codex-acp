@@ -172,9 +172,10 @@ export class CodexCommands {
         if (commandName.startsWith("$")) return { handled: false };
 
         const sessionId = sessionState.sessionId;
+        const threadId = sessionState.threadId;
         switch (commandName) {
             case "compact": {
-                await this.runWithProcessCheck(() => this.codexAcpClient.runCompact(sessionId));
+                await this.runWithProcessCheck(() => this.codexAcpClient.runCompact(threadId));
                 return { handled: true };
             }
             case "goal": {
@@ -266,7 +267,7 @@ export class CodexCommands {
     ): Promise<TurnCompletedNotification> {
         options.onTurnStartPending?.();
         return await this.runWithProcessCheck(() => this.codexAcpClient.runReview(
-            sessionState.sessionId,
+            sessionState.threadId,
             target,
             (turnId, threadId) => {
                 this.handleCommandTurnStarted(sessionState, options, turnId, threadId);
@@ -280,6 +281,7 @@ export class CodexCommands {
         options: CommandHandleOptions,
     ): Promise<CommandHandleResult> {
         const sessionId = sessionState.sessionId;
+        const threadId = sessionState.threadId;
         const argument = rest.trim();
         if (argument.length === 0) {
             await this.sendCommandUsageMessage("goal", "[<objective>|clear|pause|resume]", sessionId);
@@ -288,18 +290,18 @@ export class CodexCommands {
 
         switch (argument.toLowerCase()) {
             case "pause":
-                await this.runWithProcessCheck(() => this.codexAcpClient.setGoalStatus(sessionId, "paused"));
+                await this.runWithProcessCheck(() => this.codexAcpClient.setGoalStatus(threadId, "paused"));
                 return { handled: true };
             case "resume":
                 options.onTurnStartPending?.();
                 return this.createGoalCommandResult(await this.runWithProcessCheck(() => this.codexAcpClient.resumeGoal(
-                    sessionId,
+                    threadId,
                     (turnId) => {
-                        this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
+                        this.handleCommandTurnStarted(sessionState, options, turnId, threadId);
                     },
                 )));
             case "clear":
-                await this.runWithProcessCheck(() => this.codexAcpClient.clearGoal(sessionId));
+                await this.runWithProcessCheck(() => this.codexAcpClient.clearGoal(threadId));
                 return { handled: true };
         }
 
@@ -311,10 +313,10 @@ export class CodexCommands {
 
         options.onTurnStartPending?.();
         return this.createGoalCommandResult(await this.runWithProcessCheck(() => this.codexAcpClient.setGoal(
-            sessionId,
+            threadId,
             argument,
             (turnId) => {
-                this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
+                this.handleCommandTurnStarted(sessionState, options, turnId, threadId);
             },
         )));
     }

@@ -246,6 +246,7 @@ export class CodexAcpClient {
         const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
         return {
             sessionId: request.sessionId,
+            threadId: response.thread.id,
             currentModelId: currentModelId,
             models: codexModels,
             modelProvider: response.modelProvider,
@@ -273,6 +274,7 @@ export class CodexAcpClient {
         const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
         return {
             sessionId: request.sessionId,
+            threadId: response.thread.id,
             currentModelId: currentModelId,
             models: codexModels,
             modelProvider: response.modelProvider,
@@ -299,6 +301,7 @@ export class CodexAcpClient {
         const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
         return {
             sessionId: response.thread.id,
+            threadId: response.thread.id,
             currentModelId: currentModelId,
             models: codexModels,
             modelProvider: response.modelProvider,
@@ -566,6 +569,7 @@ export class CodexAcpClient {
 
     async sendPrompt(
         request: acp.PromptRequest,
+        threadId: string,
         agentMode: AgentMode,
         modelId: ModelId,
         serviceTier: ServiceTier | null,
@@ -582,7 +586,7 @@ export class CodexAcpClient {
             return null;
         }
         return await this.codexClient.runTurn({
-            threadId: request.sessionId,
+            threadId,
             input: input,
             approvalPolicy: agentMode.approvalPolicy,
             sandboxPolicy: addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy, additionalDirectories),
@@ -757,6 +761,7 @@ export type JsonObject = { [key in string]?: JsonValue }
 
 export type SessionMetadata = {
     sessionId: string,
+    threadId: string,
     currentModelId: string,
     models: Model[],
     modelProvider?: string | null,
