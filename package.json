@@ -1,5 +1,5 @@
 {
-  "name": "@agentclientprotocol/codex-acp",
+  "name": "@melonite/codex-acp",
   "publishConfig": {
     "access": "public"
   },
@@ -33,20 +33,20 @@
     "package:win-x64": "cd dist/bin && zip codex-acp-x64-windows.zip codex-acp-x64-windows.exe",
     "package:win-arm64": "cd dist/bin && zip codex-acp-arm64-windows.zip codex-acp-arm64-windows.exe",
     "start": "node --import tsx src/index.ts",
-    "generate-types": "./node_modules/.bin/codex app-server generate-ts --out src/app-server",
+    "generate-types": "codex app-server generate-ts --out src/app-server",
     "test": "vitest run",
     "test:e2e": "npm run build && RUN_E2E_TESTS=true vitest run src/__tests__/CodexACPAgent/e2e",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "codex-test": "tsx .claude/skills/run-codex/scripts/run-codex-test.ts"
   },
-  "homepage": "https://github.com/agentclientprotocol/codex-acp#readme",
+  "homepage": "https://github.com/max-melonite/codex-acp#readme",
   "bugs": {
-    "url": "https://github.com/agentclientprotocol/codex-acp/issues"
+    "url": "https://github.com/max-melonite/codex-acp/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agentclientprotocol/codex-acp.git"
+    "url": "git+https://github.com/max-melonite/codex-acp.git"
   },
   "keywords": [],
   "author": "Agent Client Protocol",
