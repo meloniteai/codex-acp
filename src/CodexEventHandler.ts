@@ -395,13 +395,23 @@ export class CodexEventHandler {
                 return this.createExitedReviewModeEvent(event.item);
             case "contextCompaction":
                 return this.createContextCompactedEvent();
+            case "plan":
+                // Plan mode finalizes its plan as a `plan` ThreadItem (the
+                // `<proposed_plan>` block Codex extracts out of the assistant
+                // stream). Forward the completed plan text tagged with
+                // `_meta.codex.plan` so ACP clients can render/approve it instead
+                // of silently dropping it.
+                return createAgentTextMessageChunk(
+                    event.item.text,
+                    event.item.id,
+                    { codex: { plan: { itemId: event.item.id, status: "completed" } } },
+                );
             //ignored types
             case "subAgentActivity":
             case "sleep":
             case "userMessage":
             case "hookPrompt":
             case "enteredReviewMode":
-            case "plan":
                 return null;
 
         }
