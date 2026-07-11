@@ -85,7 +85,7 @@ describe('CodexACPAgent - initialize', () => {
         ]));
     });
 
-    it('should not opt into experimental app-server capabilities for ACP elicitation support', async () => {
+    it('should not opt into OpenAI form app-server capabilities for ACP elicitation support', async () => {
         await agent.initialize({
             protocolVersion: acp.PROTOCOL_VERSION,
             clientCapabilities: {
@@ -94,7 +94,10 @@ describe('CodexACPAgent - initialize', () => {
         });
 
         expect(mockCodexConnection.sendRequest).toHaveBeenCalledWith("initialize", expect.objectContaining({
-            capabilities: null,
+            capabilities: {
+                experimentalApi: true,
+                requestAttestation: false,
+            },
         }));
     });
 

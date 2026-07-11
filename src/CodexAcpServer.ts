@@ -1114,13 +1114,14 @@ export class CodexAcpServer {
     private createPlanUpdate(
         item: ThreadItem & { type: "plan" }
     ): UpdateSessionEvent {
-        return {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-                type: "text",
-                text: `Plan:\n${item.text}`,
+        return createAgentTextMessageChunk(item.text, item.id, {
+            codex: {
+                proposedPlan: {
+                    complete: true,
+                    itemId: item.id,
+                },
             },
-        };
+        });
     }
 
     private userInputToContentBlocks(input: UserInput): acp.ContentBlock[] {
@@ -1473,7 +1474,12 @@ export class CodexAcpServer {
                 this.clientCapabilities,
                 activePrompt.signal,
             );
-            const userInputHandler = new CodexUserInputHandler(this.connection, sessionState, activePrompt.signal);
+            const userInputHandler = new CodexUserInputHandler(
+                this.connection,
+                sessionState,
+                this.clientCapabilities,
+                activePrompt.signal,
+            );
             await this.codexAcpClient.subscribeToSessionEvents(params.sessionId,
                 async (event) => {
                     await elicitationHandler.handleNotification(event);
