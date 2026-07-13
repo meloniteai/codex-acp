@@ -11,8 +11,6 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     environment: release # Optional: for enhanced security
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     permissions:
       contents: read
     steps:
@@ -32,7 +30,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - name: Run e2e tests
-        if: ${{ env.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: npm run test:e2e
 
   publish-to-npm:
