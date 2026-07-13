@@ -52,6 +52,11 @@ import type {AuthenticationStatusResponse} from "./AcpExtensions";
  */
 export const CUSTOM_GATEWAY_PROVIDER_ID = "custom-gateway";
 
+export type ForkPromptResult = {
+    response: string;
+    stopReason: string;
+};
+
 /**
  * ACP `LlmProtocol` values Codex can route through the custom gateway, mapped to
  * the Codex `wire_api`. Codex only supports the OpenAI Responses wire API here.
@@ -404,6 +409,65 @@ export class CodexAcpClient {
             await this.codexClient.threadUnsubscribe({threadId: sessionId});
         } finally {
             this.codexClient.clearThreadHandlers(sessionId);
+        }
+    }
+
+    async forkPrompt(parentThreadId: string, prompt: string, cwd: string): Promise<ForkPromptResult> {
+        const fork = await this.codexClient.threadFork({
+            threadId: parentThreadId,
+            cwd,
+            approvalPolicy: "never",
+            sandbox: "read-only",
+            ephemeral: true,
+        });
+        if (!fork.thread.ephemeral || fork.thread.path !== null) {
+            throw new Error("Codex did not create an ephemeral fork");
+        }
+        const responseByItem = new Map<string, string>();
+        const forkThreadId = fork.thread.id;
+        this.codexClient.onServerNotification(forkThreadId, (notification) => {
+            if (notification.method === "item/agentMessage/delta") {
+                const current = responseByItem.get(notification.params.itemId) ?? "";
+                responseByItem.set(notification.params.itemId, current + notification.params.delta);
+                return;
+            }
+            if (notification.method === "item/completed" && notification.params.item.type === "agentMessage") {
+                responseByItem.set(notification.params.item.id, notification.params.item.text);
+            }
+        });
+        this.codexClient.onApprovalRequest(forkThreadId, {
+            handleCommandExecution: async () => ({decision: "cancel"}),
+            handleFileChange: async () => ({decision: "cancel"}),
+            handlePermissionsRequest: async () => ({permissions: {}, scope: "turn", strictAutoReview: true}),
+        });
+        this.codexClient.onElicitationRequest(forkThreadId, {
+            handleElicitation: async () => ({action: "cancel", content: null, _meta: null}),
+        });
+        this.codexClient.onUserInputRequest(forkThreadId, {
+            handleUserInput: async () => ({answers: {}}),
+        });
+        try {
+            const completed = await this.codexClient.runTurn({
+                threadId: forkThreadId,
+                input: [{type: "text", text: prompt, text_elements: []}],
+                approvalPolicy: "never",
+                sandboxPolicy: {type: "readOnly", networkAccess: false},
+                summary: "none",
+            });
+            const completedMessages = completed.turn.items
+                .filter((item) => item.type === "agentMessage")
+                .map((item) => responseByItem.get(item.id) ?? item.text)
+                .filter((text) => text.length > 0);
+            return {
+                response: completedMessages.at(-1) ?? [...responseByItem.values()].at(-1) ?? "",
+                stopReason: completed.turn.status,
+            };
+        } finally {
+            try {
+                await this.codexClient.threadUnsubscribe({threadId: forkThreadId});
+            } finally {
+                this.codexClient.clearThreadHandlers(forkThreadId);
+            }
         }
     }
 

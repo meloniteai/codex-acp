@@ -24,6 +24,11 @@ const legacySetSessionModelParamsParser = z.object({
     modelId: z.string(),
 }).passthrough();
 
+const meloniteForkPromptParamsParser = z.object({
+    sessionId: z.string().min(1),
+    prompt: z.string().min(1),
+}).strict();
+
 if (process.argv.includes("--version")) {
     console.log(`${packageJson.name} ${packageJson.version}`);
     process.exit(0);
@@ -132,5 +137,6 @@ function startAcpServer() {
         .onRequest("authentication/status", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/status", ctx.params))
         .onRequest("authentication/logout", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/logout", ctx.params))
         .onRequest(LEGACY_SET_SESSION_MODEL_METHOD, legacySetSessionModelParamsParser, (ctx) => getAgent().extMethod(LEGACY_SET_SESSION_MODEL_METHOD, ctx.params))
+        .onRequest("melonite/fork_prompt", meloniteForkPromptParamsParser, (ctx) => getAgent().forkPrompt(ctx.params))
         .connect(acpJsonStream);
 }

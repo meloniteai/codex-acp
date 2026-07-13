@@ -248,6 +248,18 @@ export class CodexAcpServer {
         }
     }
 
+    async forkPrompt(params: {sessionId: string, prompt: string}): Promise<{response: string, stopReason: string}> {
+        const sessionState = this.sessions.get(params.sessionId);
+        if (!sessionState) {
+            throw RequestError.invalidRequest(`Session ${params.sessionId} not found`);
+        }
+        return await this.runWithProcessCheck(() => this.codexAcpClient.forkPrompt(
+            sessionState.sessionId,
+            params.prompt,
+            sessionState.cwd,
+        ));
+    }
+
     async checkAuthorization(){
         const authNeeded = await this.runWithProcessCheck(() => this.codexAcpClient.authRequired());
         logger.log("Auth requirement checked", {authRequired: authNeeded});
