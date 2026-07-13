@@ -19,6 +19,7 @@ import type {
     ItemStartedNotification,
     ThreadItem,
     ModelReroutedNotification,
+    PlanDeltaNotification,
     ReasoningSummaryPartAddedNotification,
     ReasoningSummaryTextDeltaNotification,
     ReasoningTextDeltaNotification,
@@ -76,6 +77,7 @@ export class CodexEventHandler {
     private readonly terminalCommandIds = new Set<string>();
     private readonly terminalCommandOutputIds = new Set<string>();
     private readonly agentMessagePhases = new Map<string, string | null>();
+    private readonly seenPlanDeltaItemIds = new Set<string>();
 
     constructor(connection: AcpClientConnection, sessionState: SessionState) {
         this.connection = connection;
@@ -105,6 +107,8 @@ export class CodexEventHandler {
         switch (notification.method) {
             case "item/agentMessage/delta":
                 return await this.createTextEvent(notification.params);
+            case "item/plan/delta":
+                return this.createPlanDeltaEvent(notification.params);
             case "item/started":
                 return await this.createItemEvent(notification.params);
             case "item/completed":
@@ -211,7 +215,6 @@ export class CodexEventHandler {
             case "externalAgentConfig/import/completed":
             case "rawResponseItem/completed":
             case "thread/started":
-            case "item/plan/delta":
             case "remoteControl/status/changed":
             case "app/list/updated":
             case "thread/settings/updated":
@@ -234,6 +237,31 @@ export class CodexEventHandler {
     private async createTextEvent(event: AgentMessageDeltaNotification): Promise<UpdateSessionEvent> {
         const phase = this.agentMessagePhases.get(event.itemId) ?? null;
         return createAgentTextMessageChunk(event.delta, event.itemId, createCodexMessagePhaseMeta(phase));
+    }
+
+    private createPlanDeltaEvent(event: PlanDeltaNotification): UpdateSessionEvent {
+        this.seenPlanDeltaItemIds.add(event.itemId);
+        return createAgentTextMessageChunk(event.delta, event.itemId, {
+            codex: {
+                proposedPlan: {
+                    streaming: true,
+                    itemId: event.itemId,
+                },
+            },
+        });
+    }
+
+    private createCompletedPlanEvent(item: ThreadItem & { type: "plan" }): UpdateSessionEvent {
+        const sawDelta = this.seenPlanDeltaItemIds.delete(item.id);
+        return createAgentTextMessageChunk(sawDelta ? "" : item.text, item.id, {
+            codex: {
+                proposedPlan: {
+                    complete: true,
+                    itemId: item.id,
+                    ...(sawDelta ? {finalText: item.text} : {}),
+                },
+            },
+        });
     }
 
     private async createConfigWarningEvent(event: ConfigWarningNotification): Promise<UpdateSessionEvent> {
@@ -401,8 +429,9 @@ export class CodexEventHandler {
             case "userMessage":
             case "hookPrompt":
             case "enteredReviewMode":
-            case "plan":
                 return null;
+            case "plan":
+                return this.createCompletedPlanEvent(event.item);
 
         }
     }
@@ -558,6 +587,13 @@ export class CodexEventHandler {
         return {
             sessionUpdate: "plan",
             entries: plan,
+            _meta: {
+                codex: {
+                    planUpdate: {
+                        explanation: event.explanation,
+                    },
+                },
+            },
         }
     }
 
