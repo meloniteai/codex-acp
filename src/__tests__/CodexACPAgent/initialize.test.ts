@@ -41,6 +41,7 @@ describe('CodexACPAgent - initialize', () => {
                 auth: {
                     logout: {},
                 },
+                providers: {},
                 loadSession: true,
                 promptCapabilities: {
                     embeddedContext: true,
@@ -82,6 +83,22 @@ describe('CodexACPAgent - initialize', () => {
                 id: "gateway",
             })
         ]));
+    });
+
+    it('should not opt into OpenAI form app-server capabilities for ACP elicitation support', async () => {
+        await agent.initialize({
+            protocolVersion: acp.PROTOCOL_VERSION,
+            clientCapabilities: {
+                elicitation: { form: {}, url: {} },
+            },
+        });
+
+        expect(mockCodexConnection.sendRequest).toHaveBeenCalledWith("initialize", expect.objectContaining({
+            capabilities: {
+                experimentalApi: true,
+                requestAttestation: false,
+            },
+        }));
     });
 
     it('should advertise API key auth with the legacy metadata method', () => {

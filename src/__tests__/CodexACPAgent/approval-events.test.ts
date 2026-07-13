@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as acp from '@agentclientprotocol/sdk';
 import type {
     CommandExecutionRequestApprovalParams,
     FileChangeRequestApprovalParams,
@@ -9,6 +10,7 @@ import { createCodexMockTestFixture, createTestSessionState, type CodexMockTestF
 import type { SessionState } from '../../CodexAcpServer';
 import {AgentMode} from "../../AgentMode";
 import {ApprovalOptionId} from "../../ApprovalOptionId";
+import {CodexUserInputHandler, OTHER_SENTINEL_PREFIX} from "../../CodexUserInputHandler";
 
 describe('Approval Events', () => {
     let fixture: CodexMockTestFixture;
@@ -57,7 +59,7 @@ describe('Approval Events', () => {
         it('maps a selected ACP permission option back to a Codex user input answer', async () => {
             const { promptPromise, completeTurn } = setupSessionWithPendingPrompt();
             fixture.setPermissionResponse({
-                outcome: { outcome: 'selected', optionId: 'approval:1' }
+                outcome: { outcome: 'selected', optionId: '1' }
             });
 
             const params: ToolRequestUserInputParams = {
@@ -101,8 +103,8 @@ describe('Approval Events', () => {
                 title: 'Approve app tool call?',
             });
             expect(request.options).toEqual([
-                expect.objectContaining({ optionId: 'approval:0', name: 'Allow', kind: 'allow_once' }),
-                expect.objectContaining({ optionId: 'approval:1', name: 'Cancel', kind: 'reject_once' }),
+                expect.objectContaining({ optionId: '0', name: 'Allow', kind: 'allow_once' }),
+                expect.objectContaining({ optionId: '1', name: 'Cancel', kind: 'reject_once' }),
             ]);
 
             completeTurn();
@@ -112,7 +114,7 @@ describe('Approval Events', () => {
         it('accepts native Codex option questions that include an Other affordance', async () => {
             const { promptPromise, completeTurn } = setupSessionWithPendingPrompt();
             fixture.setPermissionResponse({
-                outcome: { outcome: 'selected', optionId: 'approval:0' }
+                outcome: { outcome: 'selected', optionId: '0' }
             });
 
             const params: ToolRequestUserInputParams = {
@@ -146,15 +148,15 @@ describe('Approval Events', () => {
                 },
             });
             expect(fixture.getAcpConnectionEvents([])[0]?.args[0].options).toEqual([
-                expect.objectContaining({ optionId: 'approval:0', name: 'Yes (Recommended)', kind: 'allow_once' }),
-                expect.objectContaining({ optionId: 'approval:1', name: 'No', kind: 'reject_once' }),
+                expect.objectContaining({ optionId: '0', name: 'Yes (Recommended)', kind: 'allow_once' }),
+                expect.objectContaining({ optionId: '1', name: 'No', kind: 'reject_once' }),
             ]);
 
             completeTurn();
             await promptPromise;
         });
 
-        it('fails closed for request_user_input questions without selectable options', async () => {
+        it('auto-resolves request_user_input questions that permission fallback cannot collect', async () => {
             const { promptPromise, completeTurn } = setupSessionWithPendingPrompt();
             const params: ToolRequestUserInputParams = {
                 threadId: sessionId,
@@ -174,11 +176,225 @@ describe('Approval Events', () => {
             await expect(fixture.sendServerRequest(
                 'item/tool/requestUserInput',
                 params
-            )).rejects.toThrow('options are required');
+            )).resolves.toEqual({answers: {}});
             expect(fixture.getAcpConnectionEvents([])).toEqual([]);
 
             completeTurn();
             await promptPromise;
+        });
+
+        it('uses ACP form elicitation for full request_user_input answers when supported', async () => {
+            const connection = {
+                request: vi.fn().mockResolvedValue({
+                    action: 'accept',
+                    content: {
+                        approval: 'Allow',
+                        approval__note: 'use the staging token',
+                        comment: 'ship it',
+                        secret: 'masked-value',
+                    },
+                }),
+                notify: vi.fn(),
+            };
+            const handler = new CodexUserInputHandler(
+                connection as any,
+                createTestSessionState({sessionId}),
+                {elicitation: {form: {}}},
+            );
+
+            const response = await handler.handleUserInput({
+                threadId: sessionId,
+                turnId: 'turn-1',
+                itemId: 'request-user-input-form',
+                autoResolutionMs: null,
+                questions: [
+                    {
+                        id: 'approval',
+                        header: 'Approve app tool call?',
+                        question: 'Allow this action?',
+                        isOther: true,
+                        isSecret: false,
+                        options: [
+                            { label: 'Allow', description: 'Run the tool and continue.' },
+                            { label: 'Cancel', description: 'Cancel this tool call.' },
+                        ],
+                    },
+                    {
+                        id: 'comment',
+                        header: 'Comment',
+                        question: 'Add a note',
+                        isOther: false,
+                        isSecret: false,
+                        options: null,
+                    },
+                    {
+                        id: 'secret',
+                        header: 'Secret',
+                        question: 'Provide the token',
+                        isOther: false,
+                        isSecret: true,
+                        options: null,
+                    },
+                ],
+            });
+
+            expect(response).toEqual({
+                answers: {
+                    approval: {answers: ['Allow', `${OTHER_SENTINEL_PREFIX}use the staging token`]},
+                    comment: {answers: [`${OTHER_SENTINEL_PREFIX}ship it`]},
+                    secret: {answers: [`${OTHER_SENTINEL_PREFIX}masked-value`]},
+                },
+            });
+            expect(connection.request).toHaveBeenCalledWith(
+                acp.methods.client.elicitation.create,
+                expect.objectContaining({
+                    sessionId,
+                    mode: 'form',
+                    requestedSchema: expect.objectContaining({
+                        type: 'object',
+                        properties: expect.objectContaining({
+                            approval: expect.objectContaining({
+                                type: 'string',
+                                title: 'Approve app tool call?',
+                                description: 'Allow this action?',
+                                oneOf: [
+                                    {const: 'Allow', title: 'Allow', description: 'Run the tool and continue.'},
+                                    {const: 'Cancel', title: 'Cancel', description: 'Cancel this tool call.'},
+                                ],
+                            }),
+                            approval__note: expect.objectContaining({
+                                type: 'string',
+                            }),
+                            comment: expect.objectContaining({
+                                type: 'string',
+                                title: 'Comment',
+                                description: 'Add a note',
+                            }),
+                            secret: expect.objectContaining({
+                                type: 'string',
+                                format: 'password',
+                            }),
+                        }),
+                    }),
+                    _meta: {
+                        codex: {
+                            request_user_input: {
+                                threadId: sessionId,
+                                turnId: 'turn-1',
+                                itemId: 'request-user-input-form',
+                                autoResolutionMs: null,
+                                fields: [
+                                    {
+                                        questionId: 'approval',
+                                        answerField: 'approval',
+                                        noteField: 'approval__note',
+                                    },
+                                    {
+                                        questionId: 'comment',
+                                        answerField: 'comment',
+                                    },
+                                    {
+                                        questionId: 'secret',
+                                        answerField: 'secret',
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                }),
+                undefined,
+            );
+        });
+
+        it('auto-resolves form elicitation when the request_user_input timer fires', async () => {
+            vi.useFakeTimers();
+            try {
+                let aborted = false;
+                const connection = {
+                    request: vi.fn((_method, _params, options?: acp.SendRequestOptions) => new Promise((_resolve, reject) => {
+                        options?.cancellationSignal?.addEventListener('abort', () => {
+                            aborted = true;
+                            reject(new Error('aborted'));
+                        });
+                    })),
+                    notify: vi.fn(),
+                };
+                const handler = new CodexUserInputHandler(
+                    connection as any,
+                    createTestSessionState({sessionId}),
+                    {elicitation: {form: {}}},
+                );
+
+                const responsePromise = handler.handleUserInput({
+                    threadId: sessionId,
+                    turnId: 'turn-1',
+                    itemId: 'request-user-input-timeout',
+                    autoResolutionMs: 50,
+                    questions: [{
+                        id: 'comment',
+                        header: 'Comment',
+                        question: 'Add a note',
+                        isOther: false,
+                        isSecret: false,
+                        options: null,
+                    }],
+                });
+
+                await vi.advanceTimersByTimeAsync(50);
+
+                await expect(responsePromise).resolves.toEqual({answers: {}});
+                expect(aborted).toBe(true);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('clears the request_user_input timer when form elicitation answers first', async () => {
+            vi.useFakeTimers();
+            try {
+                let aborted = false;
+                const connection = {
+                    request: vi.fn((_method, _params, options?: acp.SendRequestOptions) => {
+                        options?.cancellationSignal?.addEventListener('abort', () => {
+                            aborted = true;
+                        });
+                        return Promise.resolve({
+                            action: 'accept',
+                            content: {comment: 'done'},
+                        });
+                    }),
+                    notify: vi.fn(),
+                };
+                const handler = new CodexUserInputHandler(
+                    connection as any,
+                    createTestSessionState({sessionId}),
+                    {elicitation: {form: {}}},
+                );
+
+                await expect(handler.handleUserInput({
+                    threadId: sessionId,
+                    turnId: 'turn-1',
+                    itemId: 'request-user-input-fast-answer',
+                    autoResolutionMs: 1000,
+                    questions: [{
+                        id: 'comment',
+                        header: 'Comment',
+                        question: 'Add a note',
+                        isOther: false,
+                        isSecret: false,
+                        options: null,
+                    }],
+                })).resolves.toEqual({
+                    answers: {
+                        comment: {answers: [`${OTHER_SENTINEL_PREFIX}done`]},
+                    },
+                });
+
+                await vi.advanceTimersByTimeAsync(1000);
+                expect(aborted).toBe(false);
+            } finally {
+                vi.useRealTimers();
+            }
         });
     });
 
