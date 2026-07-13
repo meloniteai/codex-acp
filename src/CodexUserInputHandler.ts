@@ -192,6 +192,11 @@ export class CodexUserInputHandler implements UserInputHandler {
                             turnId: params.turnId,
                             itemId: params.itemId,
                             autoResolutionMs: params.autoResolutionMs,
+                            fields: mappings.map(mapping => ({
+                                questionId: mapping.question.id,
+                                answerField: mapping.fieldName,
+                                ...(mapping.noteFieldName ? {noteField: mapping.noteFieldName} : {}),
+                            })),
                         },
                     },
                 },

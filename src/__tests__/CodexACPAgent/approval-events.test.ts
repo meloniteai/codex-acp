@@ -283,6 +283,21 @@ describe('Approval Events', () => {
                                 turnId: 'turn-1',
                                 itemId: 'request-user-input-form',
                                 autoResolutionMs: null,
+                                fields: [
+                                    {
+                                        questionId: 'approval',
+                                        answerField: 'approval',
+                                        noteField: 'approval__note',
+                                    },
+                                    {
+                                        questionId: 'comment',
+                                        answerField: 'comment',
+                                    },
+                                    {
+                                        questionId: 'secret',
+                                        answerField: 'secret',
+                                    },
+                                ],
                             },
                         },
                     },
