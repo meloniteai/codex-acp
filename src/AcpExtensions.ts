@@ -1,5 +1,6 @@
 import type {
     ClientContext,
+    McpServer,
     LoadSessionResponse,
     NewSessionResponse,
     ResumeSessionResponse,
@@ -7,6 +8,17 @@ import type {
 } from "@agentclientprotocol/sdk";
 
 export const LEGACY_SET_SESSION_MODEL_METHOD = "session/set_model";
+export const CODEX_FORK_PROMPT_METHOD = "codex/fork_prompt";
+
+export type CodexForkPromptRequest = {
+    sessionId: SessionId;
+    prompt: string;
+    mcpServers?: Array<McpServer>;
+}
+
+export type CodexForkPromptResponse = {
+    accepted: true;
+}
 
 export type LegacySessionModel = {
     modelId: string;

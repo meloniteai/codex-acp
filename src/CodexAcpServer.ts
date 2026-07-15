@@ -36,6 +36,8 @@ import {logger} from "./Logger";
 import {sanitizeMcpServerName} from "./McpServerName";
 import {createResponseItemHistoryFallbackUpdates} from "./ResponseItemHistoryFallback";
 import {
+    type CodexForkPromptRequest,
+    type CodexForkPromptResponse,
     type LegacyLoadSessionResponse,
     type LegacyNewSessionResponse,
     type LegacyResumeSessionResponse,
@@ -101,6 +103,7 @@ export interface SessionState {
     fastModeEnabled: boolean;
     currentModelSupportsFast: boolean;
     sessionMcpServers?: Array<string>;
+    sessionMcpServerConfigs?: Array<acp.McpServer>;
     terminalOutputMode: TerminalOutputMode;
     currentGoal?: ThreadGoalSnapshot | null;
 }
@@ -248,25 +251,33 @@ export class CodexAcpServer {
         }
     }
 
-    async forkPrompt(params: {
-        sessionId: string;
-        consultationId: string;
-        prompt: string;
-        async: true;
-        sandboxMode: "read-only";
-        inheritTools: false;
-        mcpServers: Array<{name: string; command: string; args: Array<string>; env: Record<string, string>}>;
-    }): Promise<{accepted: true, consultationId: string, state: "running"}> {
+    async forkPrompt(params: {sessionId: string, prompt: string}): Promise<{response: string, stopReason: string}> {
         const sessionState = this.sessions.get(params.sessionId);
         if (!sessionState) {
             throw RequestError.invalidRequest(`Session ${params.sessionId} not found`);
         }
-        void this.runWithProcessCheck(() => this.codexAcpClient.forkPrompt(
+        return await this.runWithProcessCheck(() => this.codexAcpClient.forkPrompt(
             sessionState.sessionId,
-            {prompt: params.prompt, mcpServers: params.mcpServers},
+            params.prompt,
             sessionState.cwd,
-        )).catch(error => logger.error("Restricted fork failed", {consultationId: params.consultationId, error}));
-        return {accepted: true, consultationId: params.consultationId, state: "running"};
+        ));
+    }
+
+    async detachedForkPrompt(params: CodexForkPromptRequest): Promise<CodexForkPromptResponse> {
+        const sessionState = this.sessions.get(params.sessionId);
+        if (!sessionState) {
+            throw RequestError.invalidRequest(`Session ${params.sessionId} not found`);
+        }
+        void this.runWithProcessCheck(() => this.codexAcpClient.detachedForkPrompt(
+            sessionState.sessionId,
+            {
+                prompt: params.prompt,
+                mcpServers: params.mcpServers ?? [],
+                inheritedMcpServers: sessionState.sessionMcpServerConfigs ?? [],
+            },
+            sessionState.cwd,
+        )).catch(error => logger.error("Detached fork prompt failed", error));
+        return {accepted: true};
     }
 
     async checkAuthorization(){
@@ -437,6 +448,7 @@ export class CodexAcpServer {
             fastModeEnabled: sessionMetadata.currentServiceTier === "fast",
             currentModelSupportsFast: currentModelSupportsFast,
             sessionMcpServers: sessionMcpServers,
+            sessionMcpServerConfigs: [...requestedMcpServers],
             terminalOutputMode: this.terminalOutputMode,
         };
         this.sessions.set(sessionId, sessionState);
@@ -974,6 +986,7 @@ export class CodexAcpServer {
             fastModeEnabled: sessionMetadata.currentServiceTier === "fast",
             currentModelSupportsFast: currentModelSupportsFast,
             sessionMcpServers: sessionMcpServers,
+            sessionMcpServerConfigs: [...requestedMcpServers],
             terminalOutputMode: this.terminalOutputMode,
         };
         this.sessions.set(sessionId, sessionState);
