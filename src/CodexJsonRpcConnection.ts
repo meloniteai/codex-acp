@@ -1,8 +1,9 @@
 import * as rpc from "vscode-jsonrpc/node";
-import type {MessageConnection} from "vscode-jsonrpc/node";
+import type {Message, MessageConnection, MessageReader, MessageWriter} from "vscode-jsonrpc/node";
 import type {ChildProcessWithoutNullStreams} from "node:child_process";
 import {spawn} from "node:child_process";
 import {createRequire} from "node:module";
+import {createHash} from "node:crypto";
 
 import {createJSONRPCReader, createJSONRPCWriter} from "./StdUtils";
 import {logger} from "./Logger";
@@ -27,8 +28,8 @@ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv
 
     attachLogs(codex);
 
-    const reader = createJSONRPCReader(codex.stdout);
-    const writer = createJSONRPCWriter(codex.stdin);
+    const reader = withMessageDiagnostics(createJSONRPCReader(codex.stdout), "OUT");
+    const writer = withMessageDiagnostics(createJSONRPCWriter(codex.stdin), "IN");
 
     let connection = rpc.createMessageConnection(reader, writer);
 
@@ -43,19 +44,74 @@ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv
 }
 
 function attachLogs(proc: ChildProcessWithoutNullStreams) {
-    const originalWrite = proc.stdin.write.bind(proc.stdin);
-    proc.stdin.write = (chunk: any, encoding?: any, callback?: any): boolean => {
-        logger.log(`[IN] ${chunk.toString()}`);
-        return originalWrite(chunk, encoding, callback);
-    };
-
     proc.stderr.on("data", (data) => {
-        logger.log(`[ERR] ${data.toString()}`);
-    });
-    proc.stdout.on("data", (data: Buffer) => {
-        logger.log(`[OUT] ${data.toString()}`);
+        logger.log(`[ERR] bytes=${Buffer.byteLength(data)}`);
     });
     proc.on("exit", (code) => {
         logger.log(`[EXIT] code: ${code?.toString()}`);
     });
+}
+
+function withMessageDiagnostics(reader: MessageReader, direction: "IN" | "OUT"): MessageReader;
+function withMessageDiagnostics(writer: MessageWriter, direction: "IN" | "OUT"): MessageWriter;
+function withMessageDiagnostics(
+    transport: MessageReader | MessageWriter,
+    direction: "IN" | "OUT",
+): MessageReader | MessageWriter {
+    if ("listen" in transport) {
+        return {
+            onError: transport.onError,
+            onClose: transport.onClose,
+            onPartialMessage: transport.onPartialMessage,
+            listen(callback) {
+                return transport.listen(message => {
+                    logMessageDiagnostic(direction, message);
+                    callback(message);
+                });
+            },
+            dispose() {
+                transport.dispose();
+            },
+        };
+    }
+
+    return {
+        onError: transport.onError,
+        onClose: transport.onClose,
+        write(message) {
+            logMessageDiagnostic(direction, message);
+            return transport.write(message);
+        },
+        end() {
+            transport.end();
+        },
+        dispose() {
+            transport.dispose();
+        },
+    };
+}
+
+function logMessageDiagnostic(direction: "IN" | "OUT", message: Message): void {
+    const record = message as unknown as Record<string, unknown>;
+    const method = typeof record["method"] === "string" ? record["method"] : undefined;
+    const hasId = Object.prototype.hasOwnProperty.call(record, "id");
+    const hasError = Object.prototype.hasOwnProperty.call(record, "error");
+    const kind = method ? (hasId ? "request" : "notification") : (hasError ? "error-response" : "response");
+    const methodDiagnostic = method ? ` method=${JSON.stringify(method)}` : "";
+    const idDiagnostic = hasId ? ` id=${formatMessageId(record["id"])}` : "";
+    logger.log(`[${direction}] ${kind}${methodDiagnostic}${idDiagnostic}`);
+}
+
+function formatMessageId(id: unknown): string {
+    if (typeof id === "number") {
+        return String(id);
+    }
+    if (id === null) {
+        return "null";
+    }
+    if (typeof id === "string") {
+        const digest = createHash("sha256").update(id).digest("hex").slice(0, 12);
+        return `sha256:${digest}`;
+    }
+    return "unknown";
 }

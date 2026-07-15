@@ -57,6 +57,12 @@ export type ForkPromptResult = {
     stopReason: string;
 };
 
+export type DetachedForkPrompt = {
+    prompt: string;
+    mcpServers: Array<McpServer>;
+    inheritedMcpServers: Array<McpServer>;
+};
+
 /**
  * ACP `LlmProtocol` values Codex can route through the custom gateway, mapped to
  * the Codex `wire_api`. Codex only supports the OpenAI Responses wire API here.
@@ -413,12 +419,58 @@ export class CodexAcpClient {
     }
 
     async forkPrompt(parentThreadId: string, prompt: string, cwd: string): Promise<ForkPromptResult> {
+        return await this.runForkPrompt(parentThreadId, prompt, cwd, undefined, new Set());
+    }
+
+    async detachedForkPrompt(parentThreadId: string, request: DetachedForkPrompt, cwd: string): Promise<ForkPromptResult> {
+        const configuredServers = await this.getConfigMcpServers(cwd);
+        const sessionServers = Object.fromEntries(request.inheritedMcpServers.map(server => [
+            sanitizeMcpServerName(server.name),
+            this.createMcpSeverConfig(server),
+        ]));
+        const inheritedServers = {...configuredServers, ...sessionServers};
+        const guardedServers = Object.fromEntries(Object.entries(inheritedServers).map(([name, server]) => [
+            name,
+            this.guardMcpServerConfig(server),
+        ]));
+        const requestedServerNames = new Set<string>();
+        const requestedServerEntries: Array<[string, JsonObject]> = [];
+        for (const server of request.mcpServers) {
+            const name = sanitizeMcpServerName(server.name);
+            if (Object.prototype.hasOwnProperty.call(inheritedServers, name)) {
+                throw RequestError.invalidRequest(`Requested MCP server name conflicts with inherited server: ${name}`);
+            }
+            if (requestedServerNames.has(name)) {
+                throw RequestError.invalidRequest(`Duplicate MCP server name: ${name}`);
+            }
+            requestedServerNames.add(name);
+            requestedServerEntries.push([name, this.createMcpSeverConfig(server)]);
+        }
+        const requestedServers = Object.fromEntries(requestedServerEntries);
+        return await this.runForkPrompt(parentThreadId, request.prompt, cwd, {
+            web_search: "disabled",
+            features: {
+                apps: false,
+                plugins: false,
+            },
+            mcp_servers: {...guardedServers, ...requestedServers},
+        }, requestedServerNames);
+    }
+
+    private async runForkPrompt(
+        parentThreadId: string,
+        prompt: string,
+        cwd: string,
+        config: JsonObject | undefined,
+        approvedMcpServerNames: Set<string>,
+    ): Promise<ForkPromptResult> {
         const fork = await this.codexClient.threadFork({
             threadId: parentThreadId,
             cwd,
             approvalPolicy: "never",
             sandbox: "read-only",
             ephemeral: true,
+            ...(config === undefined ? {} : {config}),
         });
         if (!fork.thread.ephemeral || fork.thread.path !== null) {
             throw new Error("Codex did not create an ephemeral fork");
@@ -441,7 +493,17 @@ export class CodexAcpClient {
             handlePermissionsRequest: async () => ({permissions: {}, scope: "turn", strictAutoReview: true}),
         });
         this.codexClient.onElicitationRequest(forkThreadId, {
-            handleElicitation: async () => ({action: "cancel", content: null, _meta: null}),
+            handleElicitation: async (params) => {
+                const meta = params._meta;
+                const isToolApproval = meta !== null
+                    && typeof meta === "object"
+                    && !Array.isArray(meta)
+                    && meta["codex_approval_kind"] === "mcp_tool_call";
+                if (approvedMcpServerNames.has(params.serverName) && isToolApproval) {
+                    return {action: "accept", content: null, _meta: null};
+                }
+                return {action: "cancel", content: null, _meta: null};
+            },
         });
         this.codexClient.onUserInputRequest(forkThreadId, {
             handleUserInput: async () => ({answers: {}}),
@@ -585,12 +647,35 @@ export class CodexAcpClient {
     }
 
     private async getConfigMcpServerNames(projectPath: string): Promise<Set<string>> {
+        return new Set(Object.keys(await this.getConfigMcpServers(projectPath)));
+    }
+
+    private async getConfigMcpServers(projectPath: string): Promise<Record<string, JsonObject>> {
         const response = await this.codexClient.configRead({ includeLayers: true, cwd: projectPath });
         const mcpServers = response?.config?.["mcp_servers"];
         if (!mcpServers || typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
-            return new Set();
+            return {};
         }
-        return new Set(Object.keys(mcpServers));
+        return Object.fromEntries(Object.entries(mcpServers).filter((entry): entry is [string, JsonObject] => {
+            const value = entry[1];
+            return value !== null && typeof value === "object" && !Array.isArray(value);
+        }));
+    }
+
+    private guardMcpServerConfig(server: JsonObject): JsonObject {
+        const normalizedServer = omitNullJsonObjectValues(server);
+        const tools = normalizedServer["tools"];
+        const guardedTools = tools !== null && typeof tools === "object" && !Array.isArray(tools)
+            ? Object.fromEntries(Object.entries(tools).map(([name, tool]) => [name, {
+                ...(tool !== null && typeof tool === "object" && !Array.isArray(tool) ? tool : {}),
+                approval_mode: "prompt",
+            }]))
+            : undefined;
+        return {
+            ...normalizedServer,
+            default_tools_approval_mode: "prompt",
+            ...(guardedTools === undefined ? {} : {tools: guardedTools}),
+        };
     }
 
     getModelProvider(): string | null {
@@ -1144,6 +1229,29 @@ function arraysEqual(left: string[], right: string[]): boolean {
 
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
     return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function omitNullJsonObjectValues(value: JsonObject): JsonObject {
+    return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => {
+        const normalized = omitNullJsonValue(item);
+        return normalized === undefined ? [] : [[key, normalized]];
+    }));
+}
+
+function omitNullJsonValue(value: JsonValue | undefined): JsonValue | undefined {
+    if (value === null || value === undefined) {
+        return undefined;
+    }
+    if (Array.isArray(value)) {
+        return value.flatMap(item => {
+            const normalized = omitNullJsonValue(item);
+            return normalized === undefined ? [] : [normalized];
+        });
+    }
+    if (isJsonObject(value)) {
+        return omitNullJsonObjectValues(value);
+    }
+    return value;
 }
 
 function gatewayApiTypeFromConfig(gatewayConfig: GatewayConfig): acp.LlmProtocol {

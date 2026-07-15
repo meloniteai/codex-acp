@@ -5,6 +5,9 @@ interface LogContext {
     [key: string]: unknown;
 }
 
+const REDACTED = "[REDACTED]";
+const sensitiveTextPattern = /(?:MELONITE_TOKEN|\b(?:authorization|proxy-authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*["']?\s*[:=]|\bbearer\s+\S+|["'](?:env|headers?|http_headers)["']\s*:)/i;
+
 class Logger {
     private readonly logFilePath: string | null;
 
@@ -32,7 +35,8 @@ class Logger {
         if (!this.logFilePath) return;
         try {
             const timestamp = this.formatTimestamp(new Date());
-            const serializedContext = context ? ` ${JSON.stringify(context)}` : "";
+            const serializedContext = context ? ` ${JSON.stringify(this.redactValue(context))}` : "";
+            message = this.redactText(message);
 
             if (!message.startsWith('[')) message = `[SYS] ${message}`;
             const line = `${timestamp} ${message}${serializedContext}`;
@@ -70,6 +74,55 @@ class Logger {
         }
 
         return String(err);
+    }
+
+    private redactValue(value: unknown, key?: string, seen = new WeakSet<object>()): unknown {
+        if (key && this.isSensitiveKey(key)) {
+            return REDACTED;
+        }
+        if (typeof value === "string") {
+            return this.redactText(value);
+        }
+        if (value === null || typeof value !== "object") {
+            return value;
+        }
+        if (seen.has(value)) {
+            return "[CIRCULAR]";
+        }
+        seen.add(value);
+        if (Array.isArray(value)) {
+            return value.map(entry => this.redactValue(entry, undefined, seen));
+        }
+
+        const record = value as Record<string, unknown>;
+        const namedSecret = typeof record["name"] === "string" && this.isSensitiveKey(record["name"]);
+        return Object.fromEntries(Object.entries(record).map(([entryKey, entryValue]) => {
+            if (namedSecret && entryKey === "value") {
+                return [entryKey, REDACTED];
+            }
+            return [entryKey, this.redactValue(entryValue, entryKey, seen)];
+        }));
+    }
+
+    private redactText(value: string): string {
+        return sensitiveTextPattern.test(value) ? REDACTED : value;
+    }
+
+    private isSensitiveKey(key: string): boolean {
+        const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+        return normalized === "env"
+            || normalized.endsWith("env")
+            || normalized.includes("token")
+            || normalized.includes("secret")
+            || normalized.includes("password")
+            || normalized.includes("passwd")
+            || normalized.includes("authorization")
+            || normalized.includes("cookie")
+            || normalized.includes("apikey")
+            || normalized.includes("authrequest")
+            || normalized.includes("httpheader")
+            || normalized === "header"
+            || normalized === "headers";
     }
 }
 

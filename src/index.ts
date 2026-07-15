@@ -12,7 +12,8 @@ import packageJson from "../package.json";
 import {logger} from "./Logger";
 import {runLoginCommand} from "./login";
 import {runCodexCli} from "./CodexCli";
-import {LEGACY_SET_SESSION_MODEL_METHOD} from "./AcpExtensions";
+import {CODEX_FORK_PROMPT_METHOD, type CodexForkPromptRequest, LEGACY_SET_SESSION_MODEL_METHOD} from "./AcpExtensions";
+import {sanitizeMcpServerName} from "./McpServerName";
 
 const emptyExtensionParamsParser = z.preprocess(
     (params) => params ?? {},
@@ -24,10 +25,54 @@ const legacySetSessionModelParamsParser = z.object({
     modelId: z.string(),
 }).passthrough();
 
-const meloniteForkPromptParamsParser = z.object({
+const legacyMeloniteForkPromptParamsParser = z.object({
     sessionId: z.string().min(1),
     prompt: z.string().min(1),
 }).strict();
+
+const extensionMetaParser = z.record(z.string(), z.unknown()).nullable().optional();
+const envVariableParser = z.object({
+    name: z.string().min(1),
+    value: z.string(),
+    _meta: extensionMetaParser,
+}).passthrough();
+const httpHeaderParser = z.object({
+    name: z.string().min(1),
+    value: z.string(),
+    _meta: extensionMetaParser,
+}).passthrough();
+const forkMcpServerParser = z.union([
+    z.object({
+        type: z.undefined().optional(),
+        name: z.string().min(1),
+        command: z.string().min(1),
+        args: z.array(z.string()).default([]),
+        env: z.array(envVariableParser).default([]),
+        _meta: extensionMetaParser,
+    }).passthrough(),
+    z.object({
+        type: z.literal("http"),
+        name: z.string().min(1),
+        url: z.string().min(1),
+        headers: z.array(httpHeaderParser).default([]),
+        _meta: extensionMetaParser,
+    }).passthrough(),
+]);
+const forkMcpServersParser = z.array(forkMcpServerParser).max(16).default([]).superRefine((servers, context) => {
+    const names = new Set<string>();
+    for (const server of servers) {
+        const name = sanitizeMcpServerName(server.name);
+        if (names.has(name)) {
+            context.addIssue({code: "custom", message: `duplicate MCP server name: ${name}`});
+        }
+        names.add(name);
+    }
+});
+const codexForkPromptParamsParser = z.object({
+    sessionId: z.string().min(1),
+    prompt: z.string().min(1),
+    mcpServers: forkMcpServersParser,
+}).passthrough();
 
 if (process.argv.includes("--version")) {
     console.log(`${packageJson.name} ${packageJson.version}`);
@@ -137,6 +182,7 @@ function startAcpServer() {
         .onRequest("authentication/status", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/status", ctx.params))
         .onRequest("authentication/logout", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/logout", ctx.params))
         .onRequest(LEGACY_SET_SESSION_MODEL_METHOD, legacySetSessionModelParamsParser, (ctx) => getAgent().extMethod(LEGACY_SET_SESSION_MODEL_METHOD, ctx.params))
-        .onRequest("melonite/fork_prompt", meloniteForkPromptParamsParser, (ctx) => getAgent().forkPrompt(ctx.params))
+        .onRequest("melonite/fork_prompt", legacyMeloniteForkPromptParamsParser, (ctx) => getAgent().forkPrompt(ctx.params))
+        .onRequest(CODEX_FORK_PROMPT_METHOD, codexForkPromptParamsParser, (ctx) => getAgent().detachedForkPrompt(ctx.params as CodexForkPromptRequest))
         .connect(acpJsonStream);
 }
