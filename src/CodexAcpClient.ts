@@ -57,6 +57,16 @@ export type ForkPromptResult = {
     stopReason: string;
 };
 
+export type RestrictedForkPrompt = {
+    prompt: string;
+    mcpServers: Array<{
+        name: string;
+        command: string;
+        args?: Array<string>;
+        env?: Record<string, string>;
+    }>;
+};
+
 /**
  * ACP `LlmProtocol` values Codex can route through the custom gateway, mapped to
  * the Codex `wire_api`. Codex only supports the OpenAI Responses wire API here.
@@ -412,13 +422,25 @@ export class CodexAcpClient {
         }
     }
 
-    async forkPrompt(parentThreadId: string, prompt: string, cwd: string): Promise<ForkPromptResult> {
+    async forkPrompt(parentThreadId: string, request: RestrictedForkPrompt, cwd: string): Promise<ForkPromptResult> {
+        const configuredServers = await this.getConfigMcpServerNames(cwd);
+        const disabledServers = Object.fromEntries([...configuredServers].map(name => [name, {enabled: false}]));
+        const dedicatedServers = Object.fromEntries(request.mcpServers.map(server => [sanitizeMcpServerName(server.name), {
+            command: server.command,
+            args: server.args ?? [],
+            env: server.env ?? {},
+        }]));
+        const dedicatedServerNames = new Set(Object.keys(dedicatedServers));
         const fork = await this.codexClient.threadFork({
             threadId: parentThreadId,
             cwd,
             approvalPolicy: "never",
             sandbox: "read-only",
             ephemeral: true,
+            config: {
+                web_search: "disabled",
+                mcp_servers: {...disabledServers, ...dedicatedServers},
+            },
         });
         if (!fork.thread.ephemeral || fork.thread.path !== null) {
             throw new Error("Codex did not create an ephemeral fork");
@@ -441,7 +463,17 @@ export class CodexAcpClient {
             handlePermissionsRequest: async () => ({permissions: {}, scope: "turn", strictAutoReview: true}),
         });
         this.codexClient.onElicitationRequest(forkThreadId, {
-            handleElicitation: async () => ({action: "cancel", content: null, _meta: null}),
+            handleElicitation: async (params) => {
+                const meta = params._meta;
+                const isToolApproval = meta !== null
+                    && typeof meta === "object"
+                    && !Array.isArray(meta)
+                    && meta["codex_approval_kind"] === "mcp_tool_call";
+                if (dedicatedServerNames.has(params.serverName) && isToolApproval) {
+                    return {action: "accept", content: null, _meta: null};
+                }
+                return {action: "cancel", content: null, _meta: null};
+            },
         });
         this.codexClient.onUserInputRequest(forkThreadId, {
             handleUserInput: async () => ({answers: {}}),
@@ -449,7 +481,7 @@ export class CodexAcpClient {
         try {
             const completed = await this.codexClient.runTurn({
                 threadId: forkThreadId,
-                input: [{type: "text", text: prompt, text_elements: []}],
+                input: [{type: "text", text: request.prompt, text_elements: []}],
                 approvalPolicy: "never",
                 sandboxPolicy: {type: "readOnly", networkAccess: false},
                 summary: "none",

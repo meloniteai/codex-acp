@@ -248,16 +248,25 @@ export class CodexAcpServer {
         }
     }
 
-    async forkPrompt(params: {sessionId: string, prompt: string}): Promise<{response: string, stopReason: string}> {
+    async forkPrompt(params: {
+        sessionId: string;
+        consultationId: string;
+        prompt: string;
+        async: true;
+        sandboxMode: "read-only";
+        inheritTools: false;
+        mcpServers: Array<{name: string; command: string; args: Array<string>; env: Record<string, string>}>;
+    }): Promise<{accepted: true, consultationId: string, state: "running"}> {
         const sessionState = this.sessions.get(params.sessionId);
         if (!sessionState) {
             throw RequestError.invalidRequest(`Session ${params.sessionId} not found`);
         }
-        return await this.runWithProcessCheck(() => this.codexAcpClient.forkPrompt(
+        void this.runWithProcessCheck(() => this.codexAcpClient.forkPrompt(
             sessionState.sessionId,
-            params.prompt,
+            {prompt: params.prompt, mcpServers: params.mcpServers},
             sessionState.cwd,
-        ));
+        )).catch(error => logger.error("Restricted fork failed", {consultationId: params.consultationId, error}));
+        return {accepted: true, consultationId: params.consultationId, state: "running"};
     }
 
     async checkAuthorization(){

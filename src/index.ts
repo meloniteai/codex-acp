@@ -26,7 +26,17 @@ const legacySetSessionModelParamsParser = z.object({
 
 const meloniteForkPromptParamsParser = z.object({
     sessionId: z.string().min(1),
+    consultationId: z.string().min(1),
     prompt: z.string().min(1),
+    async: z.literal(true),
+    sandboxMode: z.literal("read-only"),
+    inheritTools: z.literal(false),
+    mcpServers: z.array(z.object({
+        name: z.string().min(1),
+        command: z.string().min(1),
+        args: z.array(z.string()).default([]),
+        env: z.record(z.string(), z.string()).default({}),
+    }).strict()).length(1),
 }).strict();
 
 if (process.argv.includes("--version")) {
