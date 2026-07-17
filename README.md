@@ -27,6 +27,13 @@ npm install @melonite/codex-acp
 npx -y @melonite/codex-acp
 ```
 
+## Codex planning updates
+
+Codex `update_plan` TODO checklists are forwarded as standard ACP `plan`
+session updates, including pending, in-progress, and completed task states.
+These execution checklists are distinct from the Markdown proposals produced
+by Codex Plan mode.
+
 ## Detached fork extension
 
 `codex/fork_prompt` starts an ephemeral read-only fork and immediately returns

@@ -14,7 +14,7 @@ import {CodexAcpClient} from "../../../../src/CodexAcpClient";
 import {type CodexConnectionEvent, CodexAppServerClient} from "../../../../src/CodexAppServerClient";
 import {startCodexConnection} from "../../../../src/CodexJsonRpcConnection";
 import {CodexAcpServer} from "../../../../src/CodexAcpServer";
-import type {AgentSideConnection} from "@agentclientprotocol/sdk";
+import * as acp from "@agentclientprotocol/sdk";
 
 // Parse command line arguments
 function parseArgs(): { prompt: string; cwd: string; output: string; json: boolean } {
@@ -64,15 +64,27 @@ Examples:
 
 type MethodCallEvent = { method: string; args: unknown[] };
 
-function createMockAcpConnection(events: MethodCallEvent[]): AgentSideConnection {
-    return new Proxy({} as AgentSideConnection, {
+function createMockAcpConnection(
+    events: MethodCallEvent[],
+    onCall: (event: MethodCallEvent) => void,
+): acp.AgentSideConnection {
+    return new Proxy({} as acp.AgentSideConnection, {
         get(_, prop) {
             return (...args: unknown[]) => {
-                events.push({ method: String(prop), args });
+                const event = {method: String(prop), args};
+                events.push(event);
+                onCall(event);
                 return Promise.resolve({ mock: "Mocked return" });
             };
         }
     });
+}
+
+function getSessionUpdateParams(event: MethodCallEvent): unknown | undefined {
+    if (event.method !== "notify" || event.args[0] !== acp.methods.client.session.update) {
+        return undefined;
+    }
+    return event.args[1];
 }
 
 async function main() {
@@ -108,28 +120,24 @@ async function main() {
             if (json) {
                 console.log(JSON.stringify(event));
             } else {
-                console.log(`[CODEX] ${event.type}:`, JSON.stringify(event.data, null, 2));
+                console.log(`[CODEX] ${event.eventType}:`, JSON.stringify(event, null, 2));
             }
         }
     });
 
-    const acpConnection = createMockAcpConnection(acpEvents);
+    const acpConnection = createMockAcpConnection(acpEvents, (event) => {
+        const params = getSessionUpdateParams(event);
+        if (params === undefined || (output !== "all" && output !== "acp")) {
+            return;
+        }
+        if (json) {
+            console.log(JSON.stringify({method: "sessionUpdate", params}));
+        } else {
+            console.log(`[ACP] sessionUpdate:`, JSON.stringify(params, null, 2));
+        }
+    });
     const codexAcpClient = new CodexAcpClient(codexAppServerClient);
     const codexAcpAgent = new CodexAcpServer(acpConnection, codexAcpClient, undefined, () => codexConnection.process.exitCode);
-
-    // Track ACP events
-    const originalSessionUpdate = acpConnection.sessionUpdate;
-    (acpConnection as any).sessionUpdate = async (params: unknown) => {
-        acpEvents.push({ method: "sessionUpdate", args: [params] });
-        if (output === "all" || output === "acp") {
-            if (json) {
-                console.log(JSON.stringify({ method: "sessionUpdate", params }));
-            } else {
-                console.log(`[ACP] sessionUpdate:`, JSON.stringify(params, null, 2));
-            }
-        }
-        return originalSessionUpdate?.call(acpConnection, params);
-    };
 
     try {
         // Initialize
@@ -167,6 +175,7 @@ async function main() {
             console.log(`Duration: ${duration}ms`);
             console.log(`Codex Events: ${codexEvents.length}`);
             console.log(`ACP Events: ${acpEvents.length}`);
+            console.log(`ACP Session Updates: ${acpEvents.filter(event => getSessionUpdateParams(event) !== undefined).length}`);
 
             if (promptResponse._meta?.quota?.token_count) {
                 const tc = promptResponse._meta.quota.token_count as any;
@@ -181,7 +190,8 @@ async function main() {
             // Event type breakdown
             const eventTypes = new Map<string, number>();
             for (const event of codexEvents) {
-                const key = `${event.type}:${(event.data as any)?.method || "unknown"}`;
+                const method = "method" in event ? event.method : "unknown";
+                const key = `${event.eventType}:${method}`;
                 eventTypes.set(key, (eventTypes.get(key) || 0) + 1);
             }
             console.log(`\nEvent Types:`);

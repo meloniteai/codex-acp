@@ -28,6 +28,7 @@ import type {
     ThreadGoalUpdatedNotification,
     ThreadTokenUsageUpdatedNotification,
     TurnPlanUpdatedNotification,
+    TurnPlanStepStatus,
     WarningNotification
 } from "./app-server/v2";
 import type { McpStartupCompleteEvent } from "./app-server";
@@ -64,6 +65,17 @@ import {
 import {clientSupportsPlanUpdates} from "./PlanCapabilities";
 
 export { stripShellPrefix };
+
+function toAcpPlanEntryStatus(status: TurnPlanStepStatus): PlanEntry["status"] {
+    switch (status) {
+        case "pending":
+            return "pending";
+        case "inProgress":
+            return "in_progress";
+        case "completed":
+            return "completed";
+    }
+}
 
 export class CodexEventHandler {
 
@@ -121,7 +133,7 @@ export class CodexEventHandler {
             case "item/completed":
                 return await this.completeItemEvent(notification.params);
             case "turn/plan/updated":
-                return await this.updatePlan(notification.params);
+                return this.updatePlan(notification.params);
             case "error":
                 return await this.createErrorEvent(notification.params);
             case "turn/started":
@@ -580,9 +592,9 @@ export class CodexEventHandler {
         };
     }
 
-    private async updatePlan(event: TurnPlanUpdatedNotification): Promise<UpdateSessionEvent> {
+    private updatePlan(event: TurnPlanUpdatedNotification): UpdateSessionEvent {
         const plan: PlanEntry[] = event.plan.map(value => ({
-                status: value.status == "inProgress" ? "in_progress" : value.status,
+                status: toAcpPlanEntryStatus(value.status),
                 content: value.step,
                 priority: "medium"
             })

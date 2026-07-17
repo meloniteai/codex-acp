@@ -99,7 +99,7 @@ describe("Plan mode", () => {
         ]);
     });
 
-    it("keeps checklist explanation metadata on structured plan updates", async () => {
+    it("maps Codex checklist statuses and explanation to an ACP plan update", async () => {
         const fixture = createCodexMockTestFixture();
         const sessionState = createTestSessionState({sessionId: "session-id"});
 
@@ -113,6 +113,7 @@ describe("Plan mode", () => {
                     plan: [
                         {step: "Inspect", status: "completed"},
                         {step: "Patch", status: "inProgress"},
+                        {step: "Verify", status: "pending"},
                     ],
                 },
             },
@@ -126,6 +127,7 @@ describe("Plan mode", () => {
             entries: [
                 {content: "Inspect", status: "completed", priority: "medium"},
                 {content: "Patch", status: "in_progress", priority: "medium"},
+                {content: "Verify", status: "pending", priority: "medium"},
             ],
             _meta: {
                 codex: {
@@ -135,5 +137,73 @@ describe("Plan mode", () => {
                 },
             },
         });
+    });
+
+    it("forwards complete checklist replacements, including an empty clear", async () => {
+        const fixture = createCodexMockTestFixture();
+        const sessionState = createTestSessionState({sessionId: "session-id"});
+
+        await setupPromptAndSendNotifications(fixture, "session-id", sessionState, [
+            {
+                method: "turn/plan/updated",
+                params: {
+                    threadId: "session-id",
+                    turnId: "turn-id",
+                    explanation: null,
+                    plan: [
+                        {step: "Inspect", status: "inProgress"},
+                        {step: "Verify", status: "pending"},
+                    ],
+                },
+            },
+            {
+                method: "turn/plan/updated",
+                params: {
+                    threadId: "session-id",
+                    turnId: "turn-id",
+                    explanation: "Work finished.",
+                    plan: [
+                        {step: "Inspect", status: "completed"},
+                        {step: "Verify", status: "completed"},
+                    ],
+                },
+            },
+            {
+                method: "turn/plan/updated",
+                params: {
+                    threadId: "session-id",
+                    turnId: "turn-id",
+                    explanation: null,
+                    plan: [],
+                },
+            },
+        ]);
+
+        const updates = fixture.getAcpConnectionEvents([])
+            .filter(event => event.method === "sessionUpdate")
+            .map(event => event.args[0].update);
+        expect(updates).toEqual([
+            {
+                sessionUpdate: "plan",
+                entries: [
+                    {content: "Inspect", status: "in_progress", priority: "medium"},
+                    {content: "Verify", status: "pending", priority: "medium"},
+                ],
+                _meta: {codex: {planUpdate: {explanation: null}}},
+            },
+            {
+                sessionUpdate: "plan",
+                entries: [
+                    {content: "Inspect", status: "completed", priority: "medium"},
+                    {content: "Verify", status: "completed", priority: "medium"},
+                ],
+                _meta: {codex: {planUpdate: {explanation: "Work finished."}}},
+            },
+            {
+                sessionUpdate: "plan",
+                entries: [],
+                _meta: {codex: {planUpdate: {explanation: null}}},
+            },
+        ]);
     });
 });
