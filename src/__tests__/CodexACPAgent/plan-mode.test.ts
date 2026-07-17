@@ -1,4 +1,5 @@
 import {describe, expect, it} from "vitest";
+import * as acp from "@agentclientprotocol/sdk";
 import {AgentMode} from "../../AgentMode";
 import {
     createCodexMockTestFixture,
@@ -31,9 +32,13 @@ describe("Plan mode", () => {
         }));
     });
 
-    it("streams proposed plan deltas and completes without duplicating text", async () => {
+    it("emits one native Markdown plan update when Codex completes a streamed plan", async () => {
         const fixture = createCodexMockTestFixture();
         const sessionState = createTestSessionState({sessionId: "session-id"});
+        await fixture.getCodexAcpAgent().initialize({
+            protocolVersion: acp.PROTOCOL_VERSION,
+            clientCapabilities: {plan: {}},
+        });
 
         await setupPromptAndSendNotifications(fixture, "session-id", sessionState, [
             {
@@ -56,21 +61,17 @@ describe("Plan mode", () => {
             .map(event => event.args[0].update);
         expect(updates).toEqual([
             {
-                sessionUpdate: "agent_message_chunk",
-                messageId: "plan-1",
-                content: {type: "text", text: "draft plan"},
-                _meta: {codex: {proposedPlan: {streaming: true, itemId: "plan-1"}}},
-            },
-            {
-                sessionUpdate: "agent_message_chunk",
-                messageId: "plan-1",
-                content: {type: "text", text: ""},
-                _meta: {codex: {proposedPlan: {complete: true, itemId: "plan-1", finalText: "authoritative plan"}}},
+                sessionUpdate: "plan_update",
+                plan: {
+                    type: "markdown",
+                    planId: "plan-1",
+                    content: "authoritative plan",
+                },
             },
         ]);
     });
 
-    it("emits completed proposed plan text when no delta was streamed", async () => {
+    it("falls back to plain agent text when native plan updates are unsupported", async () => {
         const fixture = createCodexMockTestFixture();
         const sessionState = createTestSessionState({sessionId: "session-id"});
 
@@ -94,7 +95,6 @@ describe("Plan mode", () => {
                 sessionUpdate: "agent_message_chunk",
                 messageId: "plan-1",
                 content: {type: "text", text: "final plan"},
-                _meta: {codex: {proposedPlan: {complete: true, itemId: "plan-1"}}},
             },
         ]);
     });

@@ -4,7 +4,7 @@ import type {
     ServerNotification
 } from "./app-server";
 import type {SessionState, ThreadGoalSnapshot} from "./CodexAcpServer";
-import {type PlanEntry, RequestError} from "@agentclientprotocol/sdk";
+import {type ClientCapabilities, type PlanEntry, RequestError} from "@agentclientprotocol/sdk";
 import {ACPSessionConnection, type AcpClientConnection, type UpdateSessionEvent} from "./ACPSessionConnection";
 import type {
     AccountRateLimitsUpdatedNotification,
@@ -61,6 +61,7 @@ import {
     createAgentTextMessageChunk,
     createAgentTextThoughtChunk,
 } from "./ContentChunks";
+import {clientSupportsPlanUpdates} from "./PlanCapabilities";
 
 export { stripShellPrefix };
 
@@ -77,11 +78,17 @@ export class CodexEventHandler {
     private readonly terminalCommandIds = new Set<string>();
     private readonly terminalCommandOutputIds = new Set<string>();
     private readonly agentMessagePhases = new Map<string, string | null>();
+    private readonly nativePlanUpdates: boolean;
     private readonly seenPlanDeltaItemIds = new Set<string>();
 
-    constructor(connection: AcpClientConnection, sessionState: SessionState) {
+    constructor(
+        connection: AcpClientConnection,
+        sessionState: SessionState,
+        clientCapabilities?: ClientCapabilities | null,
+    ) {
         this.connection = connection;
         this.sessionState = sessionState;
+        this.nativePlanUpdates = clientSupportsPlanUpdates(clientCapabilities);
     }
 
     getFailure(): RequestError | null {
@@ -108,7 +115,7 @@ export class CodexEventHandler {
             case "item/agentMessage/delta":
                 return await this.createTextEvent(notification.params);
             case "item/plan/delta":
-                return this.createPlanDeltaEvent(notification.params);
+                return this.nativePlanUpdates ? null : this.createPlanDeltaEvent(notification.params);
             case "item/started":
                 return await this.createItemEvent(notification.params);
             case "item/completed":
@@ -241,27 +248,23 @@ export class CodexEventHandler {
 
     private createPlanDeltaEvent(event: PlanDeltaNotification): UpdateSessionEvent {
         this.seenPlanDeltaItemIds.add(event.itemId);
-        return createAgentTextMessageChunk(event.delta, event.itemId, {
-            codex: {
-                proposedPlan: {
-                    streaming: true,
-                    itemId: event.itemId,
-                },
-            },
-        });
+        return createAgentTextMessageChunk(event.delta, event.itemId);
     }
 
     private createCompletedPlanEvent(item: ThreadItem & { type: "plan" }): UpdateSessionEvent {
-        const sawDelta = this.seenPlanDeltaItemIds.delete(item.id);
-        return createAgentTextMessageChunk(sawDelta ? "" : item.text, item.id, {
-            codex: {
-                proposedPlan: {
-                    complete: true,
-                    itemId: item.id,
-                    ...(sawDelta ? {finalText: item.text} : {}),
+        if (this.nativePlanUpdates) {
+            this.seenPlanDeltaItemIds.delete(item.id);
+            return {
+                sessionUpdate: "plan_update",
+                plan: {
+                    type: "markdown",
+                    planId: item.id,
+                    content: item.text,
                 },
-            },
-        });
+            };
+        }
+        const sawDelta = this.seenPlanDeltaItemIds.delete(item.id);
+        return createAgentTextMessageChunk(sawDelta ? "" : item.text, item.id);
     }
 
     private async createConfigWarningEvent(event: ConfigWarningNotification): Promise<UpdateSessionEvent> {
