@@ -70,6 +70,7 @@ import {
 import packageJson from "../package.json";
 import {isJetBrains2026_1Client} from "./JBUtils";
 import {resolveTerminalOutputMode, type TerminalOutputMode} from "./TerminalOutputMode";
+import {clientSupportsPlanUpdates} from "./PlanCapabilities";
 import {
     createCodexMessagePhaseMeta,
     createAgentTextMessageChunk,
@@ -1148,14 +1149,17 @@ export class CodexAcpServer {
     private createPlanUpdate(
         item: ThreadItem & { type: "plan" }
     ): UpdateSessionEvent {
-        return createAgentTextMessageChunk(item.text, item.id, {
-            codex: {
-                proposedPlan: {
-                    complete: true,
-                    itemId: item.id,
+        if (clientSupportsPlanUpdates(this.clientCapabilities)) {
+            return {
+                sessionUpdate: "plan_update",
+                plan: {
+                    type: "markdown",
+                    planId: item.id,
+                    content: item.text,
                 },
-            },
-        });
+            };
+        }
+        return createAgentTextMessageChunk(item.text, item.id);
     }
 
     private userInputToContentBlocks(input: UserInput): acp.ContentBlock[] {
@@ -1500,7 +1504,7 @@ export class CodexAcpServer {
         const disposePromptRequestCancellation = this.observePromptRequestCancellation(signal, sessionState, activePrompt);
 
         try {
-            const eventHandler = new CodexEventHandler(this.connection, sessionState);
+            const eventHandler = new CodexEventHandler(this.connection, sessionState, this.clientCapabilities);
             const approvalHandler = new CodexApprovalHandler(this.connection, sessionState, activePrompt.signal);
             const elicitationHandler = new CodexElicitationHandler(
                 this.connection,
